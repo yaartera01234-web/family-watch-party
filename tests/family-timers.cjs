@@ -1,0 +1,11 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/family-timers.js'),'utf8');
+const sent=[],c={FamilyNative:{timerSupport:()=>true,postMessage:s=>sent.push(JSON.parse(s))}};c.window=c;vm.createContext(c);vm.runInContext(source,c);
+let count=0;const one=c.setTimeout((a,b)=>{count+=a+b},20,2,3);assert.equal(sent.at(-1).action,'timerStart');assert.equal(sent.at(-1).delay,20);assert.equal(sent.at(-1).repeat,false);c.FamilyTimers.fire(one);c.FamilyTimers.fire(one);assert.equal(count,5);
+const repeat=c.setInterval(()=>count++,1000);c.FamilyTimers.fire(repeat);c.FamilyTimers.fire(repeat);assert.equal(count,7);c.clearInterval(repeat);c.FamilyTimers.fire(repeat);assert.equal(count,7);assert.equal(sent.at(-1).action,'timerCancel');
+const cancelled=c.setTimeout(()=>count++,0);c.clearTimeout(cancelled);c.FamilyTimers.fire(cancelled);assert.equal(count,7);
+c.setTimeout(()=>{},Infinity);assert.equal(sent.at(-1).delay,86400000);c.setTimeout(()=>{},-1);assert.equal(sent.at(-1).delay,1);
+let nested;const outer=c.setTimeout(()=>{nested=c.setTimeout(()=>count++,1)},1);c.FamilyTimers.fire(outer);c.FamilyTimers.fire(nested);assert.equal(count,8);
+const original=()=>{},browser={setTimeout:original};browser.window=browser;vm.createContext(browser);vm.runInContext(source,browser);assert.equal(browser.setTimeout,original);
+console.log('PASS native-timer routing, once/repeat, args, cancellation/stale firing, bounds, nested scheduling and browser fallback. Native scheduler mocked.');

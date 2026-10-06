@@ -20,7 +20,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
-/** One foreground Activity. No service, background WebView, receiver, worker or restart path. */
+/** One Activity retains its media core/document behind a user-started non-sticky media service. */
 class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var web: WebView
@@ -43,6 +43,8 @@ class MainActivity : Activity() {
     private var mediaId = ""
     private var pending = false
     private var requestedPlaying = false
+    private var playbackHeld = false
+    private val nativeTimers = HashMap<Int, Runnable>()
     private var requestedPosition = 0.0
     private var muted = false
     private var loadStarted = 0L
@@ -89,6 +91,7 @@ class MainActivity : Activity() {
         pageReady = false; pageRestored = false; webAlive = true
         web = WebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
+            setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
@@ -162,13 +165,15 @@ class MainActivity : Activity() {
         YtAudioSource.resume()
         createPage()
         web.onResume(); web.resumeTimers(); immersive(); restoreUiIfNeeded()
+        emit("window.familyBackground&&window.familyBackground(false,${JSONObject.quote(mediaId)})")
+        if(!joined) requestSessionNotificationPermission()
         main.removeCallbacks(ticker); main.post(ticker)
     }
     override fun onPause() {
         if (photoPending && !joined) {
             foreground = false; main.removeCallbacks(ticker)
             web.onPause(); web.pauseTimers()
-        } else suspendForBackground()
+        } else if (joined) retainForBackground() else suspendForBackground()
         super.onPause()
     }
     override fun onStop() {
@@ -178,7 +183,7 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         if (isFinishing) { clearResume(); fullStop() }
-        else suspendForBackground()
+        else { captureResume(); fullStop() }
         super.onDestroy()
     }
     private fun readResumeForTask() {
@@ -214,8 +219,49 @@ class MainActivity : Activity() {
     }
     private fun destroyPage() {
         if (!webAlive) return
+        nativeTimers.values.forEach { main.removeCallbacks(it) }; nativeTimers.clear()
         webAlive=false; pageReady=false; pageRestored=false; pageGeneration++
         try { web.removeJavascriptInterface("FamilyNative"); web.stopLoading(); web.loadUrl("about:blank"); web.onPause(); web.pauseTimers(); root.removeView(web); web.destroy() } catch (_: Throwable) {}
+    }
+    private fun holdPlayback() {
+        playbackHeld=true; requestedPlaying=false
+        player?.blockPlayback(true); releaseFocus()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    private fun retainForBackground() {
+        foreground=false
+        holdPlayback(); captureResume(); gestures.leave()
+        // Keep the exact player, demuxer cache, pending resolver, document and native timers.
+        // Neither stop/loadfile nor a room leave/join is issued on screen lock/Home.
+        emit("window.familyBackground&&window.familyBackground(true)")
+    }
+    private fun startSessionService() {
+        FamilySessionService.closeSession={ clearResume(); fullStop(); finishAndRemoveTask(); killOwnProcess() }
+        startForegroundService(Intent(this,FamilySessionService::class.java).setAction(FamilySessionService.START))
+
+    }
+    private fun requestSessionNotificationPermission() {
+        if (Build.VERSION.SDK_INT>=33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED && !sessionPrefs.getBoolean("notificationAsked",false)) {
+            sessionPrefs.edit().putBoolean("notificationAsked",true).apply()
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),701)
+        }
+    }
+    private fun stopSessionService() {
+        FamilySessionService.closeSession=null
+        stopService(Intent(this,FamilySessionService::class.java))
+    }
+    private fun startNativeTimer(o: JSONObject) {
+        val id=o.optInt("id",-1); if(id<1)return
+        nativeTimers.remove(id)?.let { main.removeCallbacks(it) }
+        if(nativeTimers.size>=512)return
+        val delay=o.optLong("delay",1).coerceIn(1L,86400000L);val repeat=o.optBoolean("repeat")
+        val callback=object:Runnable { override fun run() {
+            if(closed || !webAlive || nativeTimers[id]!==this)return
+            if(!repeat)nativeTimers.remove(id)
+            emit("window.FamilyTimers&&window.FamilyTimers.fire($id)")
+            if(repeat && nativeTimers[id]===this)main.postDelayed(this,delay)
+        }}
+        nativeTimers[id]=callback;main.postDelayed(callback,delay)
     }
     private fun suspendForBackground() {
         if (closed) return
@@ -242,6 +288,7 @@ class MainActivity : Activity() {
     }
     private fun fullStop() {
         if (closed) return
+        stopSessionService()
         closed = true; foreground = false; joined = false; pending = false; loadGeneration++
         // Bounded shutdown only, never a restart timer/service. Even a stuck native destroy
         // cannot keep this app/its decoder or extractor children alive after leaving.
@@ -290,7 +337,7 @@ class MainActivity : Activity() {
         if (joined && !closed) emit("window.familyBack&&window.familyBack()")
         else { fullStop(); finishAndRemoveTask(); killOwnProcess() }
     }
-    private fun emit(js: String) { if (foreground && !closed && webAlive) web.evaluateJavascript(js, null) }
+    private fun emit(js: String) { if ((foreground || joined) && !closed && webAlive) web.evaluateJavascript(js, null) }
     private fun error(message: String) {
         pending = false
         emit("window.familyError&&window.familyError(${JSONObject.quote(message)})")
@@ -301,24 +348,32 @@ class MainActivity : Activity() {
         player?.destroy(); player = null; releaseFocus()
     }
     private fun command(o: JSONObject) {
-        if (!foreground || closed) return
+        if ((!foreground && !joined) || closed) return
         when (o.optString("action")) {
-            "join" -> { if (resolver.isShutdown) resolver = Executors.newSingleThreadExecutor(); YtAudioSource.resume(); (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; gestures.enter(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
-            "leave" -> { clearResume(); joined = false; gestures.leave(); stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
-            "restore" -> { joined = true; gestures.enter(); immersive() }
-            "suspend" -> { captureResume(); stopMedia(); resolver.shutdownNow(); YtAudioSource.shutdown(); terminateOwnedChildren(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            "timerStart" -> startNativeTimer(o)
+            "timerCancel" -> nativeTimers.remove(o.optInt("id",-1))?.let { main.removeCallbacks(it) }
+            "background" -> if(joined) holdPlayback()
+            "userPlay" -> {
+                val allowed=foreground && (getSystemService(POWER_SERVICE) as PowerManager).isInteractive && !(getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
+                if(allowed) { playbackHeld=false;player?.blockPlayback(false);gestures.enter();window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+                emit("window.FamilySession&&window.FamilySession.playGranted(${o.optLong("id",-1)},$allowed)")
+            }
+            "join" -> { if(!foreground)return; startSessionService(); playbackHeld=false; if (resolver.isShutdown) resolver = Executors.newSingleThreadExecutor(); YtAudioSource.resume(); (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; gestures.enter(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
+            "leave" -> { stopSessionService(); playbackHeld=false; clearResume(); joined = false; gestures.leave(); stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
+            "restore" -> { playbackHeld=true; joined = true; gestures.enter(); immersive() }
+            "suspend" -> { holdPlayback(); captureResume() }
             "gestureBegin" -> if (joined) gestures.begin(o.optLong("id",-1),o.optString("kind"))
             "gestureMove" -> if (joined) gestures.move(o.optLong("id",-1),o.optDouble("delta",Double.NaN))
             "gestureEnd" -> if (joined) gestures.end(o.optLong("id",-1))
             "rotate" -> { requestedOrientation = if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; immersive() }
-            "load" -> if (joined) load(o)
+            "load" -> if (joined && foreground && !playbackHeld) load(o)
             "stop" -> stopMedia()
             "pause" -> { requestedPlaying = false; player?.pause() }
-            "resume" -> if (joined) { if (acquireFocus()) { requestedPlaying = true; if (!pending) player?.resume() } else error("Audio busy hai. Retry karo.") }
-            "seek" -> { val p=o.optDouble("position",0.0); if (p.isFinite() && p in 0.0..1e8) { requestedPosition=p; lastSeekAt=SystemClock.elapsedRealtime(); if (!pending) player?.seekTo(p) } }
+            "resume" -> if (joined && foreground && !playbackHeld) { if (acquireFocus()) { requestedPlaying = true; if (!pending) player?.resume() } else error("Audio busy hai. Retry karo.") }
+            "seek" -> if (foreground && !playbackHeld) { val p=o.optDouble("position",0.0); if (p.isFinite() && p in 0.0..1e8) { requestedPosition=p; lastSeekAt=SystemClock.elapsedRealtime(); if (!pending) player?.seekTo(p) } }
             "mute" -> { muted=o.optBoolean("muted"); player?.setMuted(muted) }
             "aspect" -> player?.setAspect(o.optInt("index",0))
-            "speed" -> player?.setSyncSpeed(o.optDouble("speed",1.0))
+            "speed" -> player?.setSyncSpeed(if(playbackHeld) 1.0 else o.optDouble("speed",1.0))
             "audio" -> player?.selectAudio(o.optInt("id",-1)) { ok -> if (!ok) emit("window.familyToast&&window.familyToast(\"Audio track nahi badla.\")") }
         }
     }
@@ -341,7 +396,7 @@ class MainActivity : Activity() {
             val result = if (yt != null) YtAudioSource.resolve(yt, preferHeight=height) else YtAudioSource.Result(url,title)
             if (Thread.currentThread().isInterrupted) return@submit
             main.post {
-                if (ticket != loadGeneration || closed || !foreground || !joined) return@post
+                if (ticket != loadGeneration || closed || !joined) return@post
                 if (result == null) { error("Video nahi chali. Retry karo ya quality badlo."); return@post }
                 title = result.title ?: title; actualQuality = result.height; qualities = result.qualities
                 startWhenReady(ticket,result,0)
@@ -349,25 +404,26 @@ class MainActivity : Activity() {
         }
     }
     private fun startWhenReady(ticket: Long, source: YtAudioSource.Result, tries: Int) {
-        if (ticket != loadGeneration || !foreground || closed || !joined) return
+        if (ticket != loadGeneration || closed || !joined) return
         val p = player ?: return
         if (!p.isReady) {
             if (tries >= 150 || p.error != null) { error("Player tayyar nahi hua. Retry karo."); return }
             main.postDelayed({ startWhenReady(ticket,source,tries+1) },100); return
         }
         p.setFullscreen(true); p.show()
-        p.play(source.url,requestedPosition,muted,source.audioUrl,source.userAgent,source.referer,!requestedPlaying)
+        p.blockPlayback(playbackHeld || !foreground)
+        p.play(source.url,requestedPosition,muted,source.audioUrl,source.userAgent,source.referer,!requestedPlaying || playbackHeld || !foreground)
     }
     private val ticker = object : Runnable {
         override fun run() {
-            if (!foreground || closed) return
+            if ((!foreground && !joined) || closed) return
             val p = player
             if (pending && p?.loaded() == true) { pending = false; if (!requestedPlaying) p.pause() }
             if (pending && SystemClock.elapsedRealtime()-loadStarted > 90_000) { resolveTask?.cancel(true); YtAudioSource.cancelAll(); p?.stop(); error("Video nahi chali. Retry karo.") }
             if (joined) {
                 val tracks=JSONArray();p?.audioTracks()?.forEach { tracks.put(JSONObject().put("id",it.id).put("label",it.label).put("selected",it.selected)) }
                 val state=JSONObject().put("id",mediaId).put("ready",p?.loaded()==true&&!pending).put("pending",pending)
-                    .put("position",p?.rawPosition()?:0.0).put("duration",p?.duration()?:0.0).put("playing",p?.isPaused()==false)
+                    .put("held",playbackHeld).put("position",p?.rawPosition()?:0.0).put("duration",p?.duration()?:0.0).put("playing",p?.isPaused()==false)
                     .put("buffering",p?.buffering()==true).put("ended",p?.ended()==true).put("speed",p?.syncSpeed()?:1.0)
                     .put("title",title).put("quality",actualQuality).put("qualities",JSONArray(qualities))
                     .put("video",p?.actualHeight()?:0).put("artwork",p?.hasArtwork()==true).put("tracks",tracks)
@@ -378,17 +434,18 @@ class MainActivity : Activity() {
         }
     }
     private inner class FamilyBridge(private val epoch: Long) {
+        @JavascriptInterface fun timerSupport(): Boolean = true
         @JavascriptInterface fun postMessage(json: String) {
-            if (!foreground || closed || epoch != pageGeneration || json.length > 600000) return
+            if ((!foreground && !joined) || closed || epoch != pageGeneration || json.length > 600000) return
             val message = try { JSONObject(json) } catch (_: Throwable) { return }
             if (message.optString("action") == "remember") {
                 val clean=message.optJSONObject("snapshot")?.let { SessionSnapshot.sanitize(it) } ?: return
                 synchronized(sessionLock) {
-                    if (foreground && !closed && epoch == pageGeneration) savedSession=clean
+                    if ((foreground || joined) && !closed && epoch == pageGeneration) savedSession=clean
                 }
                 return
             }
-            main.post { if (foreground && !closed && epoch == pageGeneration) try { command(message) } catch (_: Throwable) { error("Dobara try karo.") } }
+            main.post { if ((foreground || joined) && !closed && epoch == pageGeneration) try { command(message) } catch (_: Throwable) { error("Dobara try karo.") } }
         }
     }
 }

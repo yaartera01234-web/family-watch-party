@@ -4,16 +4,16 @@ from pathlib import Path
 import sys, re, hashlib, xml.etree.ElementTree as ET
 r=Path(__file__).resolve().parents[1]; a=r/'app/src/main'; src='\n'.join(p.read_text() for p in (a/'java').rglob('*.kt'))
 g=(r/'app/build.gradle.kts').read_text();assert 'applicationId = "app.party.family"' in g;assert 'app.party.music' not in src
-for bad in ['startForegroundService(', 'startService(', 'startForeground(', 'START_STICKY', 'AlarmManager', 'WorkManager', 'NotificationManager', 'MediaSessionService', 'enterPictureInPictureMode', 'BgNotifyService', 'MusicService', 'CallForegroundService', 'ReplyReceiver']:
+for bad in ['startService(', 'START_STICKY', 'AlarmManager', 'WorkManager', 'MediaSessionService', 'enterPictureInPictureMode', 'BgNotifyService', 'MusicService', 'CallForegroundService', 'ReplyReceiver']:
  assert bad not in src,bad
 for good in ['web.destroy()', 'resolver.shutdownNow()', 'YtAudioSource.shutdown()', 'finishAndRemoveTask()', 'killOwnProcess()', 'override fun onPause()', 'override fun onStop()', 'loadGeneration++']:
  assert good in src,good
 assert 'SystemClock.sleep(450); forceTerminateProcess()' in src
 assert 'hideSoftInputFromWindow' in src
 assert 'uid == ownUid' in src and 'pgrp == ownPid' in src and 'Os.kill(-ownGroup' in src
-assert 'player?.destroy()' in src and 'if (!foreground || closed)' in src
+assert 'player?.destroy()' in src and 'playbackHeld' in src
 assets=a/'assets';html=(assets/'index.html').read_text();js=(assets/'family.js').read_text();room=(assets/'family-room.js').read_text()
-assert 'FamilyNative' in js and 'familyNativeState' in js and "document.hidden&&joined" in js
+assert 'FamilyNative' in js and 'familyNativeState' in js and "window.familyBackground?.(document.hidden)" in js
 assert 'setInterval' not in js, 'No fake preview playback clock'
 assert 'no MPV engine' not in html and 'A quiet morning' not in html and 'data:image/webp' not in html
 for bad in ['id="dm-', 'id="chat-messages"', 'id="wp-party-lobby"', 'id="yp-bar"', '<iframe', '<video', '<audio']:
@@ -30,19 +30,24 @@ assert not list(r.glob('**/*.jks'))
 A='{http://schemas.android.com/apk/res/android}';T='{http://schemas.android.com/tools}'
 def check_manifest(p,merged=False):
  root=ET.parse(p).getroot();app=root.find('application');assert app is not None
- for tag in ['service','receiver']:
+ for tag in ['receiver']:
   for e in app.findall(tag):assert not merged and e.get(T+'node')=='remove',(p,tag,e.attrib)
+ services=[e for e in app.findall('service') if e.get(T+'node')!='remove']
+ assert len(services)==1
+ assert services[0].get(A+'name') in ['.FamilySessionService','app.party.family.FamilySessionService']
+ assert services[0].get(A+'foregroundServiceType')=='mediaPlayback' and services[0].get(A+'exported')=='false'
+ assert services[0].get(A+'stopWithTask')=='false'
  for perm in root.findall('uses-permission'):
   n=perm.get(A+'name','')
-  if any(x in n for x in ['FOREGROUND_SERVICE','WAKE_LOCK','POST_NOTIFICATIONS','RECEIVE_BOOT_COMPLETED','RECORD_AUDIO','SYSTEM_ALERT_WINDOW']):
+  if any(x in n for x in ['RECEIVE_BOOT_COMPLETED','RECORD_AUDIO','SYSTEM_ALERT_WINDOW']):
    assert not merged and perm.get(T+'node')=='remove',(p,n)
  acts=app.findall('activity');assert len(acts)==1,(p,len(acts));assert acts[0].get(A+'supportsPictureInPicture')=='false';assert acts[0].get(A+'excludeFromRecents')=='false'
 check_manifest(a/'AndroidManifest.xml')
 if '--merged' in sys.argv:
  manifests=list((r/'app/build/intermediates/merged_manifests').glob('**/AndroidManifest.xml'));assert manifests,'Merged manifests not found'
  for p in manifests:check_manifest(p,True)
- print('PASS merged manifests: zero services/receivers, no background/microphone/notification permissions, one non-PiP Activity')
-print('PASS separate identity, removed feature/service sources, foreground teardown fences, local UI assets, exact extractor pin and selected towers. Static checks only.')
+ print('PASS merged manifests: one non-sticky media service, zero receivers, no boot/microphone permissions, one non-PiP Activity')
+print('PASS separate identity, removed feature/service sources, background hold and terminal teardown fences, local UI assets, exact extractor pin and selected towers. Static checks only.')
 
 # Device-local gesture permission and APIs must not become system-brightness/background control.
 gesture=(a/'java/app/party/family/PlayerGestures.kt').read_text()
@@ -64,3 +69,19 @@ restore=session.split('window.familyRestore=data=>{')[1].split('async function r
 assert "room.join(" not in restore and "send('load'" not in restore and "send('resume'" not in restore
 assert 'model.playing=false' in restore and 'sessionPaused=true' in restore
 print('PASS reversible suspension has no terminal kill; task-scoped paused restore has no network/media start. Static only.')
+
+retained=activity.split('private fun retainForBackground() {')[1].split('private fun startSessionService')[0]
+for bad in ['destroyPage()', 'shutdownNow()', 'player?.destroy()', 'fullStop()', 'killOwnProcess()', 'finishAndRemoveTask()', 'loadGeneration++', 'web.onPause()', 'pauseTimers()']: assert bad not in retained,bad
+assert 'holdPlayback()' in retained and 'captureResume()' in retained
+service=(a/'java/app/party/family/FamilySessionService.kt').read_text()
+assert 'START_NOT_STICKY' in service and 'override fun onTaskRemoved' in service and 'closeTask()' in service
+assert 'PARTIAL_WAKE_LOCK' in service and 'it.release()' in service
+assert 'stopSessionService()' in activity and 'setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)' in activity
+assert 'p.blockPlayback(playbackHeld || !foreground)' in activity
+mpv=(a/'java/app/party/family/MpvVideoPlayer.kt').read_text()
+assert 'val paused=startPaused || playbackBlocked' in mpv
+assert 'fun resume() { main.post { if (destroyed || playbackBlocked)' in mpv
+assert 'fun seekTo(pos: Double) { main.post { if (destroyed || playbackBlocked)' in mpv
+assert html.index('family-timers.js')<html.index('mqtt.min.js')
+assert 'timerSupport(): Boolean = true' in activity and 'nativeTimers.clear()' in activity
+print('PASS retained decoder/document/resolve on lock; native play/seek gates; non-sticky FGS/task-removal cleanup; main-looper MQTT timers. Static, not device proof.')

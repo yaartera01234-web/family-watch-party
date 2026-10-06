@@ -25,6 +25,11 @@ import java.util.concurrent.Executors
 class MpvVideoPlayer(private val act: Activity, private val root: FrameLayout) {
 
     @Volatile private var destroyed = false
+    @Volatile private var playbackBlocked = false
+    fun blockPlayback(blocked: Boolean) {
+        playbackBlocked=blocked
+        if(blocked) { try { view?.paused=true } catch (_: Throwable) {}; setSyncSpeed(1.0) }
+    }
     private var view: MpvView? = null
     private var currentSource = ""
     private var fullscreen = false
@@ -94,11 +99,12 @@ class MpvVideoPlayer(private val act: Activity, private val root: FrameLayout) {
                 dispPos = -1.0
                 localError = null
                 v.muted = startMuted
-                v.paused = startPaused
+                val paused=startPaused || playbackBlocked
+                v.paused = paused
                 // MPV length-quoted option values protect URL commas/quotes. Attach audio
                 // during loadfile, not via a racing audio-add after video has started.
                 fun quoted(value: String) = "%${value.toByteArray(Charsets.UTF_8).size}%$value"
-                val options = mutableListOf("pause=${if(startPaused) "yes" else "no"}", "start=${if (pos.isFinite()) pos.coerceAtLeast(0.0) else 0.0}",
+                val options = mutableListOf("pause=${if(paused) "yes" else "no"}", "start=${if (pos.isFinite()) pos.coerceAtLeast(0.0) else 0.0}",
                     "user-agent=" + quoted(userAgent), "audio-files-clr=",
                     // Separate YouTube audio is a second demuxer: split the budget.
                     "demuxer-max-bytes=${(if (audioUrl.isNullOrBlank()) 100L else 50L) * 1024 * 1024}",
@@ -116,8 +122,8 @@ class MpvVideoPlayer(private val act: Activity, private val root: FrameLayout) {
     }
 
     fun pause() { main.post { if (destroyed) return@post; try { view?.paused = true } catch (t: Throwable) {} } }
-    fun resume() { main.post { if (destroyed) return@post; try { view?.paused = false } catch (t: Throwable) {} } }
-    fun seekTo(pos: Double) { main.post { if (destroyed) return@post; try { view?.timePos = pos; dispPos = pos } catch (t: Throwable) {} } }
+    fun resume() { main.post { if (destroyed || playbackBlocked) return@post; try { view?.paused = false } catch (t: Throwable) {} } }
+    fun seekTo(pos: Double) { main.post { if (destroyed || playbackBlocked) return@post; try { view?.timePos = pos; dispPos = pos } catch (t: Throwable) {} } }
     fun setMuted(m: Boolean) { main.post { if (destroyed) return@post; try { view?.muted = m } catch (t: Throwable) {} } }
 
     /* MPV ka time-pos kabhi kabhi +-0.25s peeche jump karta hai (A/V sync jitter) — display par
@@ -247,7 +253,7 @@ class MpvVideoPlayer(private val act: Activity, private val root: FrameLayout) {
         io.shutdownNow()
     }
 
-    // Active foreground core: 100 MiB forward / 8 MiB backward packet cache.
+    // Retained media-session core: 100 MiB forward / 8 MiB backward packet cache.
     // 24h read-ahead lets short finite songs reach EOF; byte cap still bounds cache.
     // This is not a whole-process RAM cap, nor a download-completion guarantee.
     private fun slowNetOptions(): MpvOptions = MpvOptions(

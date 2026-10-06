@@ -4,13 +4,16 @@ Separate **app.party.family** / **Family Watch Party**, Android 8+ / arm64-v8a.
 Derived from the user's original FINAL Android source `fdca1120141a7dfdc005796b16a0d408c1634bea`.
 This repository does not update the original application, package or repository.
 
-## Foreground only — intentionally strict
-- Current joining page → immersive MPV player, playlist/source/settings inside the player.
-- No chat, DM, calls, lobby, foreground/background services, notifications, PiP, boot receiver, jobs or restart watchdog.
-- Home, lock or leaving the app stops playback and destroys the player and WebView/MQTT document. Resolver work and yt-dlp processes are cancelled. The inactive task remains in Recents. Returning restores a paused, local movie/queue/position snapshot; only an explicit Play reconnects and resumes. Recents swipe removes the task, with terminal cleanup when Android delivers finishing callbacks. No claim of privileged Android Force Stop; Android may retain an inert cached process. Snapshots are task-ID scoped so a new task does not restore a swiped session.
-- The avatar picker may retain an **inert, paused joining screen only** while Android's external picker is open. It is unavailable while joined; there is no active media, broker connection or service behind it.
-- Keep-screen-on applies only while joined and visible; it is not a background wake lock.
-- Source/build tests are not a substitute for Home/lock/Recents/old-device testing on a handset.
+## Retained movie session (v1.4)
+- Joining page → immersive MPV, playlist/source/settings inside. No chat, DM, calls or lobby.
+- Lock/Home pauses playback but retains the **same native player/cache, ongoing extractor and WebView/MQTT room**. Unlock does not reload, rejoin or autoplay. Explicit Play resumes the retained decoder. Live peer changes are reconciled only after that action; a legitimate room track change/seek may require loading another movie/position.
+- A user-started, **START_NOT_STICKY mediaPlayback foreground service**, ongoing notification and partial CPU wake lock support background buffering/room maintenance. There is no boot receiver, sticky restart, alarm or restart worker. Grant notifications to see the session notification and its Close action.
+- Main-looper-backed timers drive MQTT rather than relying on throttled hidden-WebView timers. A paused device is excluded from sync anchors and does not rewind active peers. Native gates prevent queued/remote Play or Seek from reviving playback while held.
+- MPV's existing **100 MiB** forward-cache budget (split across separate video/audio demuxers) is unchanged. Loading continues until the budget or end of media; this is not an unlimited download or whole-process RAM limit.
+- Recents swipe invokes the service's task-removal cleanup and stops media, sockets, timers, extractor, notification and wake lock. Close session/explicit exit also clean up. Android/OEM delivery and process eviction remain outside app control; this is not privileged system Force Stop. No automatic restart.
+- Android/OEM battery/Doze restrictions, memory pressure, renderer failure and network/broker availability can still interrupt a session. After actual process loss, the task-scoped local snapshot is an offline paused recovery, not a preserved RAM cache. New tasks ignore a swiped task's snapshot.
+- Window brightness and audio focus are released on backgrounding; playback stays paused on return. The avatar picker is joining-screen-only. Keep-screen-on applies only to the visible player, not lock-screen buffering.
+- Automated checks do not replace handset testing of long screen locks, cache continuity, pending extraction, unlock, remote commands and Recents swipe.
 
 ## Fullscreen device controls (v1.2)
 Swipe vertically on the left video surface for window-only brightness, or on the right for media volume. Up increases/down decreases. A small HUD reports the native level. Brightness restores on leaving the player. Media volume uses the device’s actual steps; existing player Mute remains separate/respected. Toolbar/playlist/seek-bar touches are excluded. No global brightness-write permission or room broadcast is used. The normal MODIFY_AUDIO_SETTINGS permission is for foreground media-volume adjustment only.

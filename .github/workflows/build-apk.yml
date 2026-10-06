@@ -1,4 +1,4 @@
-name: Family APK — MPV023 foreground only
+name: Family APK — MPV023 retained media session
 on:
   push:
     branches: [ main ]
@@ -32,6 +32,7 @@ jobs:
           node tests/family-seek-drag.cjs
           node tests/family-gestures.cjs
           node tests/family-session.cjs
+          node tests/family-timers.cjs
       - name: Bundled family UI and foreground-disconnect tests
         run: |
           npm install --prefix "$RUNNER_TEMP/family-ui" playwright@1.51.1 --no-audit --no-fund
@@ -58,7 +59,7 @@ jobs:
           set -euo pipefail
           SDK="$ANDROID_HOME/build-tools/35.0.0"
           BASE=app/build/outputs/apk/release/app-release-unsigned.apk
-          APK=Family-Watch-Party-1.3-MPV023.apk
+          APK=Family-Watch-Party-1.4-MPV023.apk
           python tests/mpv023/engine_swap.py swap --work /tmp/mpv023 --base "$BASE" --output /tmp/mpv023/unsigned.apk
           "$SDK/zipalign" -P 16 -f 4 /tmp/mpv023/unsigned.apk /tmp/mpv023/aligned.apk
           echo "$FAMILY_KEYSTORE" | base64 -d > "$RUNNER_TEMP/family.jks"
@@ -68,14 +69,14 @@ jobs:
           "$SDK/zipalign" -c -P 16 4 "$APK"
           python tests/mpv023/engine_swap.py verify --work /tmp/mpv023 --base "$BASE" --output "$APK"
           "$SDK/aapt" dump badging "$APK" | tee APK-INFO.txt
-          grep -F "package: name='app.party.family' versionCode='4' versionName='1.3-MPV023'" APK-INFO.txt
+          grep -F "package: name='app.party.family' versionCode='5' versionName='1.4-MPV023'" APK-INFO.txt
           git archive --format=zip --prefix=family-watch-party/ HEAD > Family-Watch-Party-Source.zip
           sha256sum "$APK" Family-Watch-Party-Source.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Family-Watch-Party-MPV023
           path: |
-            Family-Watch-Party-1.3-MPV023.apk
+            Family-Watch-Party-1.4-MPV023.apk
             Family-Watch-Party-Source.zip
             SHA256SUMS.txt
             SIGNATURE.txt
@@ -83,31 +84,35 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
       - name: Point Family release tag at the verified source
         run: |
-          git tag -f v1.3-mpv023 "$GITHUB_SHA"
-          git push --force origin refs/tags/v1.3-mpv023
+          git tag -f v1.4-mpv023 "$GITHUB_SHA"
+          git push --force origin refs/tags/v1.4-mpv023
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.3-mpv023
+          tag_name: v1.4-mpv023
           target_commitish: ${{ github.sha }}
-          name: 'Family Watch Party 1.3 — MPV023'
+          name: 'Family Watch Party 1.4 — MPV023'
           make_latest: true
           body: |
-            v1.3/code4: lock/Home stops playback and network but retains a paused task in Recents.
+            v1.4/code5: lock/Home pauses playback but retains the live player, buffer and room connection.
             Accepted v1.1 cutout/seek fixes retained; brightness is window-local, no system brightness write.
-            Install over Family1.0/1.1/1.2 without uninstalling (same package/signing key).
+            Install over Family1.0/1.1/1.2/1.3 without uninstalling (same package/signing key).
             Separate app.party.family. Original Music Watch Party stays untouched.
             Android 8+ / arm64-v8a. Exact pinned Synkplay 0.23.0 MPV native bundle.
             Bundled joining page → full-screen MPV with in-player playlist.
-            No DM, chatting, calls, services, notifications, PiP or auto-restart.
-            Return restores the saved movie/position offline; Play explicitly reconnects before playback.
-            Recents swipe closes the task. No background service, automatic playback or rejoin.
+            No DM, chatting, calls, PiP, boot receiver or auto-restart.
+            User-started non-sticky media foreground service, ongoing notification and partial wake lock.
+            Unlock keeps the same decoder/cache and room; only explicit Play resumes.
+            Cache fills up to the existing 100MiB budget, not an unlimited movie download.
+            Recents swipe stops service, timers, network, decoder and extractor via task-removal cleanup.
+            Background remote Play/Seek/track changes cannot replace the retained movie until explicit Play.
+            Android/OEM process eviction or network loss can still interrupt a session; no Force Stop guarantee.
             UI and MQTT client are bundled: installed APK does not depend on this repo/Pages.
             Internet/public MQTT and media sources are still required for online playback.
             Download APK AND source before deleting this repository. Keep private signing backup separately.
             Automated/source/native-link checks are not handset playback/lifecycle proof.
             See README and tests/mpv023 for provenance, GPL notices and reproduction instructions.
           files: |
-            Family-Watch-Party-1.3-MPV023.apk
+            Family-Watch-Party-1.4-MPV023.apk
             Family-Watch-Party-Source.zip
             SHA256SUMS.txt
             SIGNATURE.txt
