@@ -12,6 +12,8 @@ class FamilyRoom{
  const c=root.mqtt.connect(BROKERS[tower]||BROKERS[0],{clientId:'family-'+this.id,clean:true,connectTimeout:12000,reconnectPeriod:2500,keepalive:25,resubscribe:false,queueQoSZero:false,timerVariant:'native',will:{topic:this.prefix+'/p/'+this.id,payload:JSON.stringify({online:false}),qos:1,retain:true}});this.client=c;
  const alive=()=>this.active&&g===this.generation&&this.client===c;
  c.on('connect',()=>{if(!alive()){c.end(true);return}this.connected=true;c.subscribe([this.prefix+'/state',this.prefix+'/events',this.prefix+'/p/+'],{qos:1},err=>{if(!alive())return;if(err){this.connected=false;this.o.status('error');return}this.o.status('connected');this.presence();this.send({type:'hello'});});});
+ c.on('offline',()=>{if(!alive())return;this.connected=false;this.peers.clear();this.o.status('reconnecting');this.o.peers(0);});
+ c.on('reconnect',()=>{if(alive()&&!this.connected)this.o.status('reconnecting')});
  c.on('close',()=>{if(!alive())return;this.connected=false;this.peers.clear();this.o.status('reconnecting');this.o.peers(0);});
  c.on('error',()=>{if(alive())this.o.status('error')});
  c.on('message',(topic,bytes,packet)=>{if(!alive()||bytes.length>600000)return;const part=topic.slice(this.prefix.length+1);if(part.startsWith('p/')&&bytes.length===0){this.peers.delete(part.slice(2));return}let m;try{m=JSON.parse(bytes.toString())}catch(e){return}if(part.startsWith('p/')){const id=part.slice(2);if(id.length>160)return;if(!m||m.online!==true){this.peers.delete(id);return}if(this.peers.size<64||this.peers.has(id))this.peers.set(id,{seen:Date.now(),name:String(m.name||'').slice(0,20)});return;}

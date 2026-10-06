@@ -6,15 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SessionSnapshotTest {
-    private fun data() = JSONObject("""{"name":" Family ","room":" Movie ","tower":1,"quality":720,"aspect":3,"muted":true,"duration":7200,"displayTitle":"Saved movie","model":{"epoch":[9,"peer"],"queue":[{"id":"movie","url":"https://example.com/movie.mp4","title":"Movie"}],"current":"movie","pos":611.5,"playing":true,"kind":"select"}}""")
+    private fun data() = JSONObject("""{"name":" Family ","room":" Movie ","tower":1,"independent":true,"quality":720,"aspect":3,"muted":true,"duration":7200,"displayTitle":"Saved movie","model":{"epoch":[9,"peer"],"queue":[{"id":"movie","url":"https://example.com/movie.mp4","title":"Movie"}],"current":"movie","pos":611.5,"playing":true,"kind":"select"}}""")
     @Test fun restoresOnlyPausedBoundedLocalData() {
         val s=SessionSnapshot.sanitize(data())!!
-        assertEquals("Family",s.getString("name")); assertEquals("Movie",s.getString("room"))
+        assertEquals("Family",s.getString("name")); assertEquals("Movie",s.getString("room")); assertTrue(s.getBoolean("independent"))
         assertFalse(s.getJSONObject("model").getBoolean("playing"))
         assertEquals(611.5,s.getJSONObject("model").getDouble("pos"),0.0)
         assertEquals(720,s.getInt("quality"));assertEquals(3,s.getInt("aspect"));assertTrue(s.getBoolean("muted"))
         assertEquals("Saved movie",s.getString("displayTitle"))
         assertEquals(s.toString(),SessionSnapshot.sanitize(s)!!.toString())
+        val legacy=data();legacy.remove("independent");assertFalse(SessionSnapshot.sanitize(legacy)!!.getBoolean("independent"))
     }
     @Test fun emptyRoomIsAValidPausedSession() {
         val s=data();s.getJSONObject("model").put("queue",JSONArray()).put("current",JSONObject.NULL)
@@ -41,6 +42,6 @@ class SessionSnapshotTest {
     }
     @Test fun dropsUnknownFieldsAndClampsPreferences() {
         val s=data().put("quality",999).put("aspect",99).put("secret","unused").put("duration",-1).put("displayTitle","x".repeat(200))
-        val out=SessionSnapshot.sanitize(s)!!;assertFalse(out.has("secret"));assertEquals(144,out.getInt("quality"));assertEquals(5,out.getInt("aspect"));assertEquals(0.0,out.getDouble("duration"),0.0);assertEquals(160,out.getString("displayTitle").length)
+        val out=SessionSnapshot.sanitize(s)!!;assertFalse(out.has("secret"));assertTrue(out.getBoolean("independent"));assertEquals(144,out.getInt("quality"));assertEquals(5,out.getInt("aspect"));assertEquals(0.0,out.getDouble("duration"),0.0);assertEquals(160,out.getString("displayTitle").length)
     }
 }

@@ -15,6 +15,9 @@ assert 'player?.destroy()' in src and 'playbackHeld' in src
 assets=a/'assets';html=(assets/'index.html').read_text();js=(assets/'family.js').read_text();room=(assets/'family-room.js').read_text()
 assert 'FamilyNative' in js and 'familyNativeState' in js and "window.familyBackground?.(document.hidden)" in js
 assert 'setInterval' not in js, 'No fake preview playback clock'
+assert 'family.offline.v1:' in js and 'function enterIndependent' in js and 'function reconnectRoom' in js
+assert 'if(!independentMode&&!room.connected)' in js and 'Independent · Reconnect' in js
+assert 'window.familyPersistLocalState' in js and 'LOCAL PLAYLIST' in js
 assert 'no MPV engine' not in html and 'A quiet morning' not in html and 'data:image/webp' not in html
 for bad in ['id="dm-', 'id="chat-messages"', 'id="wp-party-lobby"', 'id="yp-bar"', '<iframe', '<video', '<audio']:
  assert bad not in html,bad

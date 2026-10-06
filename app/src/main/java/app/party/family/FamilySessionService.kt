@@ -17,7 +17,7 @@ class FamilySessionService : Service() {
         val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val close=PendingIntent.getService(this,1,Intent(this,FamilySessionService::class.java).setAction(CLOSE),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification=Notification.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.ic_media_pause)
-            .setContentTitle("Family Watch Party").setContentText("Lock pauses playback, keeps buffer and room. Swipe app away to close.")
+            .setContentTitle("Family Watch Party").setContentText("Lock pauses playback and keeps the buffer. Swipe away to close.")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(Notification.Action.Builder(null,"Close session",close).build()).build()
         if (Build.VERSION.SDK_INT>=29) startForeground(41,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
