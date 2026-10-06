@@ -1,0 +1,94 @@
+name: Family APK — MPV023 foreground only
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  family-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.11.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Family scope and synchronization checks
+        run: |
+          python tests/family_scope.py
+          node tests/sync-policy.cjs
+          node tests/family-protocol.cjs
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Exact old engine — no latest downloads
+        run: |
+          sdkmanager 'ndk;29.0.14206865' 'build-tools;35.0.0'
+          python tests/mpv023/engine_swap.py prepare --work /tmp/mpv023
+          python tests/mpv023/engine_swap.py build --work /tmp/mpv023 --ndk "$ANDROID_HOME/ndk/29.0.14206865"
+      - name: Compile native host, resolver unit tests and release app
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleRelease --stacktrace
+          python tests/family_scope.py --merged
+      - name: Substitute pinned native engine and independently sign Family APK
+        env:
+          FAMILY_KEYSTORE: ${{ secrets.FAMILY_KEYSTORE }}
+          FAMILY_STORE_PASSWORD: ${{ secrets.FAMILY_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SDK="$ANDROID_HOME/build-tools/35.0.0"
+          BASE=app/build/outputs/apk/release/app-release-unsigned.apk
+          APK=Family-Watch-Party-1.0-MPV023.apk
+          python tests/mpv023/engine_swap.py swap --work /tmp/mpv023 --base "$BASE" --output /tmp/mpv023/unsigned.apk
+          "$SDK/zipalign" -P 16 -f 4 /tmp/mpv023/unsigned.apk /tmp/mpv023/aligned.apk
+          echo "$FAMILY_KEYSTORE" | base64 -d > "$RUNNER_TEMP/family.jks"
+          "$SDK/apksigner" sign --ks "$RUNNER_TEMP/family.jks" --ks-key-alias family --ks-pass env:FAMILY_STORE_PASSWORD --key-pass env:FAMILY_STORE_PASSWORD --out "$APK" /tmp/mpv023/aligned.apk
+          rm "$RUNNER_TEMP/family.jks"
+          "$SDK/apksigner" verify --verbose --print-certs "$APK" | tee SIGNATURE.txt
+          "$SDK/zipalign" -c -P 16 4 "$APK"
+          python tests/mpv023/engine_swap.py verify --work /tmp/mpv023 --base "$BASE" --output "$APK"
+          "$SDK/aapt" dump badging "$APK" | tee APK-INFO.txt
+          grep -F "package: name='app.party.family' versionCode='1' versionName='1.0-MPV023'" APK-INFO.txt
+          git archive --format=zip --prefix=family-watch-party/ HEAD > Family-Watch-Party-Source.zip
+          sha256sum "$APK" Family-Watch-Party-Source.zip > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Family-Watch-Party-MPV023
+          path: |
+            Family-Watch-Party-1.0-MPV023.apk
+            Family-Watch-Party-Source.zip
+            SHA256SUMS.txt
+            SIGNATURE.txt
+            APK-INFO.txt
+            app/build/reports/tests/testDebugUnitTest/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0-mpv023
+          name: 'Family Watch Party 1.0 — MPV023'
+          make_latest: true
+          body: |
+            Separate app.party.family. Original Music Watch Party stays untouched.
+            Android 8+ / arm64-v8a. Exact pinned Synkplay 0.23.0 MPV native bundle.
+            Bundled joining page → full-screen MPV with in-player playlist.
+            No DM, chatting, calls, services, notifications, PiP or auto-restart.
+            Home/lock/background stops media and network; explicit reopen + Join required.
+            UI and MQTT client are bundled: installed APK does not depend on this repo/Pages.
+            Internet/public MQTT and media sources are still required for online playback.
+            Download APK AND source before deleting this repository. Keep private signing backup separately.
+            Automated/source/native-link checks are not handset playback/lifecycle proof.
+            See README and tests/mpv023 for provenance, GPL notices and reproduction instructions.
+          files: |
+            Family-Watch-Party-1.0-MPV023.apk
+            Family-Watch-Party-Source.zip
+            SHA256SUMS.txt
+            SIGNATURE.txt
+            APK-INFO.txt

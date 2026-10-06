@@ -1,0 +1,17 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Never commit signing secrets or generated delivery packages.
+*.jks
+*.keystore
+signing.json
+*.apk
+Family-Watch-Party-Source.zip
+SHA256SUMS.txt
+SIGNATURE.txt
+APK-INFO.txt
