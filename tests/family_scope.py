@@ -43,3 +43,12 @@ if '--merged' in sys.argv:
  for p in manifests:check_manifest(p,True)
  print('PASS merged manifests: zero services/receivers, no background/microphone/notification permissions, one non-PiP Activity')
 print('PASS separate identity, removed feature/service sources, foreground teardown fences, local UI assets, exact extractor pin and selected towers. Static checks only.')
+
+# Device-local gesture permission and APIs must not become system-brightness/background control.
+gesture=(a/'java/app/party/family/PlayerGestures.kt').read_text()
+assert 'Settings.System.put' not in gesture and 'WRITE_SETTINGS' not in (a/'AndroidManifest.xml').read_text()
+assert 'screenBrightness = previousBrightness' in gesture
+assert 'AudioManager.STREAM_MUSIC' in gesture and 'STREAM_VOICE_CALL' not in gesture
+assert 'MODIFY_AUDIO_SETTINGS' in (a/'AndroidManifest.xml').read_text()
+assert 'room.publish' not in (assets/'family-gestures.js').read_text()
+print('PASS window-only brightness, restored joining brightness, device media volume and no room publication.')

@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private var actualQuality = 0
     private var photoCallback: ValueCallback<Array<Uri>>? = null
     private var photoPending = false
+    private val gestures by lazy { PlayerGestures(this, audio) { state -> emit("window.familyGestureLevel&&window.familyGestureLevel($state)") } }
     private var focusHeld = false
     private var focusRequested = false
     private val audio by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
@@ -222,8 +223,11 @@ class MainActivity : Activity() {
     private fun command(o: JSONObject) {
         if (!foreground || closed) return
         when (o.optString("action")) {
-            "join" -> { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
-            "leave" -> { joined = false; stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
+            "join" -> { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; gestures.enter(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
+            "leave" -> { joined = false; gestures.leave(); stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
+            "gestureBegin" -> if (joined) gestures.begin(o.optLong("id",-1),o.optString("kind"))
+            "gestureMove" -> if (joined) gestures.move(o.optLong("id",-1),o.optDouble("delta",Double.NaN))
+            "gestureEnd" -> if (joined) gestures.end(o.optLong("id",-1))
             "rotate" -> { requestedOrientation = if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; immersive() }
             "load" -> if (joined) load(o)
             "stop" -> stopMedia()

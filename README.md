@@ -12,6 +12,9 @@ This repository does not update the original application, package or repository.
 - Keep-screen-on applies only while joined and visible; it is not a background wake lock.
 - Source/build tests are not a substitute for Home/lock/Recents/old-device testing on a handset.
 
+## Fullscreen device controls (v1.2)
+Swipe vertically on the left video surface for window-only brightness, or on the right for media volume. Up increases/down decreases. A small HUD reports the native level. Brightness restores on leaving the player. Media volume uses the device’s actual steps; existing player Mute remains separate/respected. Toolbar/playlist/seek-bar touches are excluded. No global brightness-write permission or room broadcast is used. The normal MODIFY_AUDIO_SETTINGS permission is for foreground media-volume adjustment only.
+
 ## Exact old player
 The nine MPV/FFmpeg/C++ libraries are byte-identical to **Synkplay Android v0.23.0** (not latest). The existing `libmpvKt 0.3.0` JNI adapter is rebuilt from its pinned source for the FFmpeg62 ABI. See `tests/mpv023/manifest.json` and its README for hashes, source revisions and GPL/license notices. Wrapper changes are limited to this derivative's lifecycle fences, synchronous destruction and paused loads. Resolver pin remains yt-dlp 2026.08.19 / youtubedl-android 0.18.1.
 
