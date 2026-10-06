@@ -152,6 +152,9 @@ class MainActivity : Activity() {
     private fun fullStop() {
         if (closed) return
         closed = true; foreground = false; joined = false; pending = false; loadGeneration++
+        // Bounded shutdown only, never a restart timer/service. Even a stuck native destroy
+        // cannot keep this app/its decoder or extractor children alive after leaving.
+        Thread({ SystemClock.sleep(450); forceTerminateProcess() }, "family-exit").apply { isDaemon = true; start() }
         main.removeCallbacksAndMessages(null)
         resolveTask?.cancel(true); YtAudioSource.cancelAll(); resolver.shutdownNow(); YtAudioSource.shutdown()
         player?.destroy(); player = null; releaseFocus()
@@ -166,6 +169,9 @@ class MainActivity : Activity() {
         // Wait briefly for interrupted yt-dlp execute() to destroy its child before terminating this app.
         try { resolver.awaitTermination(300, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
         YtAudioSource.cancelAll()
+        forceTerminateProcess()
+    }
+    private fun forceTerminateProcess() {
         val ownPid = android.os.Process.myPid()
         val ownUid = android.os.Process.myUid()
         // yt-dlp may spawn QuickJS. Kill only this package UID's children, never another app.
@@ -205,7 +211,7 @@ class MainActivity : Activity() {
     private fun command(o: JSONObject) {
         if (!foreground || closed) return
         when (o.optString("action")) {
-            "join" -> { joined = true; window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
+            "join" -> { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
             "leave" -> { joined = false; stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
             "rotate" -> { requestedOrientation = if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; immersive() }
             "load" -> if (joined) load(o)

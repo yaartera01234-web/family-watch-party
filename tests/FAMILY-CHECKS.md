@@ -25,3 +25,5 @@ Initial CI 37439744430 passed compile/merged-manifest/native hash/signing gates;
 Install the final APK on the user's older arm64 device. Test actual MP4, YouTube144p/manual quality, MP3/artwork, two-phone family synchronization, Home, lock, Back, Recents and reopening. No sound, notifications, network reconnect or service should continue after leaving. Reopen must require Join. The joining avatar picker alone may retain an inert paused UI; it cannot keep a room/player active.
 
 No original app/repository files were changed by this derivative.
+
+Final hardening additionally hides the Android keyboard on Join, acquires foreground audio focus without auto-resume on focus gain, and arms a one-shot 450ms terminal shutdown fuse so a blocked native destructor cannot leave the app running. Own-UID child cleanup and an own-PID process-group ownership check cover Python/QuickJS descendants; no other app UID/group is targeted. This is terminal cleanup, not an ongoing/restart service.
