@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.media.AudioManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.net.Uri
 import android.os.*
 import android.view.*
@@ -40,6 +43,27 @@ class MainActivity : Activity() {
     private var actualQuality = 0
     private var photoCallback: ValueCallback<Array<Uri>>? = null
     private var photoPending = false
+    private var focusHeld = false
+    private var focusRequested = false
+    private val audio by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
+    private val audioFocus by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
+            .setOnAudioFocusChangeListener({ change ->
+                if (change < 0 && !closed) {
+                    focusHeld = false; requestedPlaying = false; player?.pause()
+                    emit("window.familyAudioFocusLost&&window.familyAudioFocusLost()")
+                }
+            }, main).build()
+    }
+    private fun acquireFocus(): Boolean {
+        if (focusHeld) return true
+        focusRequested = true
+        focusHeld = audio.requestAudioFocus(audioFocus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        return focusHeld
+    }
+    private fun releaseFocus() { if (focusRequested) audio.abandonAudioFocusRequest(audioFocus); focusHeld = false; focusRequested = false }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -130,7 +154,7 @@ class MainActivity : Activity() {
         closed = true; foreground = false; joined = false; pending = false; loadGeneration++
         main.removeCallbacksAndMessages(null)
         resolveTask?.cancel(true); YtAudioSource.cancelAll(); resolver.shutdownNow(); YtAudioSource.shutdown()
-        player?.destroy(); player = null
+        player?.destroy(); player = null; releaseFocus()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::web.isInitialized) {
             // Destroying the document terminates MQTT sockets/reconnect timers, not just UI visibility.
@@ -142,7 +166,25 @@ class MainActivity : Activity() {
         // Wait briefly for interrupted yt-dlp execute() to destroy its child before terminating this app.
         try { resolver.awaitTermination(300, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
         YtAudioSource.cancelAll()
-        android.os.Process.killProcess(android.os.Process.myPid())
+        val ownPid = android.os.Process.myPid()
+        val ownUid = android.os.Process.myUid()
+        // yt-dlp may spawn QuickJS. Kill only this package UID's children, never another app.
+        try {
+            java.io.File("/proc").listFiles()?.forEach { entry ->
+                val pid = entry.name.toIntOrNull() ?: return@forEach
+                if (pid != ownPid) try {
+                    val uidLine = java.io.File(entry, "status").readLines().firstOrNull { it.startsWith("Uid:") }
+                    val uid = uidLine?.substringAfter(":")?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.toIntOrNull()
+                    if (uid == ownUid) android.os.Process.killProcess(pid)
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
+        // Zygote normally gives an app its own process group. Guard ownership before group kill.
+        try {
+            if (android.system.Os.getpgid(ownPid) == ownPid)
+                android.system.Os.kill(-ownPid, android.system.OsConstants.SIGKILL)
+        } catch (_: Throwable) {}
+        android.os.Process.killProcess(ownPid)
         exitProcess(0)
     }
     @Deprecated("Activity back dispatch")
@@ -158,7 +200,7 @@ class MainActivity : Activity() {
     private fun stopMedia() {
         loadGeneration++; resolveTask?.cancel(true); YtAudioSource.cancelAll()
         pending = false; requestedPlaying = false; mediaId = ""; title = ""; actualQuality = 0
-        player?.destroy(); player = null
+        player?.destroy(); player = null; releaseFocus()
     }
     private fun command(o: JSONObject) {
         if (!foreground || closed) return
@@ -169,15 +211,16 @@ class MainActivity : Activity() {
             "load" -> if (joined) load(o)
             "stop" -> stopMedia()
             "pause" -> { requestedPlaying = false; player?.pause() }
-            "resume" -> if (joined) { requestedPlaying = true; if (!pending) player?.resume() }
+            "resume" -> if (joined) { if (acquireFocus()) { requestedPlaying = true; if (!pending) player?.resume() } else error("Audio busy hai. Retry karo.") }
             "seek" -> { val p=o.optDouble("position",0.0); if (p.isFinite() && p in 0.0..1e8) { requestedPosition=p; if (!pending) player?.seekTo(p) } }
             "mute" -> { muted=o.optBoolean("muted"); player?.setMuted(muted) }
             "aspect" -> player?.setAspect(o.optInt("index",0))
             "speed" -> player?.setSyncSpeed(o.optDouble("speed",1.0))
-            "audio" -> player?.selectAudio(o.optInt("id",-1)) { ok -> if (!ok) error("Audio track nahi badla.") }
+            "audio" -> player?.selectAudio(o.optInt("id",-1)) { ok -> if (!ok) emit("window.familyToast&&window.familyToast(\"Audio track nahi badla.\")") }
         }
     }
     private fun load(o: JSONObject) {
+        if (!acquireFocus()) { error("Audio busy hai. Retry karo."); return }
         val url = o.optString("url").trim()
         val uri = try { Uri.parse(url) } catch (_: Throwable) { return }
         if (url.length > 8192 || uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank()) { error("Sahi video link likho."); return }

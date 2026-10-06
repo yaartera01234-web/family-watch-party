@@ -1,0 +1,18 @@
+'use strict';
+/* Real public WSS transport; native playback mocked. Retained synthetic test state is removed. */
+const assert=require('node:assert/strict'),path=require('node:path');const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+(async()=>{const b=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});const pages=[];let prefix='';try{
+ const tower=String(process.env.FAMILY_TEST_TOWER||'2');
+ const roomName='fq-'+Date.now().toString(36);
+ async function peer(name){const c=await b.newContext({viewport:{width:820,height:390}});const p=await c.newPage();pages.push(p);p.setDefaultTimeout(25000);await p.addInitScript(()=>{window.__commands=[];window.__n={};window.FamilyNative={postMessage:raw=>{const m=JSON.parse(raw);window.__commands.push(m);if(m.action==='load'){window.__n={id:m.id,ready:true,pending:false,position:m.position,duration:240,playing:m.playing,buffering:false,ended:false,speed:1,title:m.title,quality:0,video:720,artwork:false,tracks:[]};setTimeout(()=>window.familyNativeState({...window.__n}),20)}else if(['seek','pause','resume'].includes(m.action)){if(m.action==='seek')window.__n.position=m.position;else window.__n.playing=m.action==='resume';window.familyNativeState?.({...window.__n})}}}});await p.goto('file://'+path.resolve(__dirname,'../app/src/main/assets/index.html'));await p.locator('#name-input').fill(name);await p.locator('#room-input').fill(roomName);await p.selectOption('#tower-input',tower);await p.locator('#join-btn').click();await p.waitForSelector('#f-status[data-state="connected"]');return p;}
+ const a=await peer('QA-A'),d=await peer('QA-B');prefix=await a.evaluate(()=>room.prefix);
+ await a.locator('#f-panel-source').click();await a.locator('#f-link-title').fill('Transport check');await a.locator('#f-link-url').fill('https://example.com/video.mp4');await a.locator('#f-link-form button').click();await d.getByRole('heading',{name:'Transport check',exact:true}).waitFor();assert(await d.evaluate(()=>window.__commands.some(x=>x.action==='load')));await d.locator('#f-play').click();await a.waitForSelector('#f-play[aria-pressed="false"]');assert(await a.evaluate(()=>window.__commands.some(x=>x.action==='pause')));
+ const late=await peer('QA-Late');await late.getByRole('heading',{name:'Transport check',exact:true}).waitFor();assert(await late.evaluate(()=>window.__commands.some(x=>x.action==='load'&&x.playing===false)));
+ // Retained queue delivered even without requesting a fresh UI publish (late join also sends hello).
+ console.log('PASS real '+['EMQX','HiveMQ','tyckr'][+tower]+' TLS/WSS: three Family clients, shared queue, two-way pause control and late-join paused state. Native bridge mocked; no real media fetched.');
+ }finally{
+ for(const p of pages)try{await p.evaluate(()=>{room.timers.forEach(clearInterval);room.timers=[]})}catch(e){}
+ if(prefix&&pages[0])try{await pages[0].evaluate(async prefix=>{const c=room.client;if(!c?.connected)return;await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('cleanup timeout')),7000);c.publish(prefix+'/state','',{qos:1,retain:true},err=>{clearTimeout(timer);err?reject(err):resolve()})})},prefix);console.log('PASS synthetic retained queue deleted with QoS1 acknowledgement.')}catch(e){console.error('CLEANUP FAILED',prefix,e.message);process.exitCode=1}
+ for(const p of pages)try{await p.evaluate(async()=>{const c=room.client;if(c?.connected)await new Promise(resolve=>c.publish(room.prefix+'/p/'+room.id,'',{qos:1,retain:true},resolve));room.leave()})}catch(e){}
+ await b.close();}
+})().catch(e=>{console.error(e);process.exitCode=1});

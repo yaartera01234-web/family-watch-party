@@ -8,6 +8,7 @@ for bad in ['startForegroundService(', 'startService(', 'startForeground(', 'STA
  assert bad not in src,bad
 for good in ['web.destroy()', 'resolver.shutdownNow()', 'YtAudioSource.shutdown()', 'finishAndRemoveTask()', 'killOwnProcess()', 'override fun onPause()', 'override fun onStop()', 'loadGeneration++']:
  assert good in src,good
+assert 'uid == ownUid' in src and 'Os.getpgid(ownPid) == ownPid' in src and 'Os.kill(-ownPid' in src
 assert 'player?.destroy()' in src and 'if (!foreground || closed)' in src
 assets=a/'assets';html=(assets/'index.html').read_text();js=(assets/'family.js').read_text();room=(assets/'family-room.js').read_text()
 assert 'FamilyNative' in js and 'familyNativeState' in js and "document.hidden&&joined" in js
@@ -19,6 +20,7 @@ for path in assets.glob('*'):
  if path.suffix in ['.html','.js','.css'] and path.name!='mqtt.min.js':
   s=path.read_text();assert 'github.io/watch-party' not in s and 'wp-ver.txt' not in s
 for f in re.findall(r'<script[^>]+src="([^"]+)"',html):assert '://' not in f and (assets/f).is_file(),f
+assert "timerVariant:'native'" in room, "MQTT worker timers must not bypass foreground document lifecycle"
 assert "c.end(true)" in room and 'this.generation++' in room and 'this.timers.forEach(clearInterval)' in room
 assert all(x in room for x in ['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://mqtt.tyckr.io:8081'])
 assert hashlib.sha256((a/'res/raw/ytdlp').read_bytes()).hexdigest()=='1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6'

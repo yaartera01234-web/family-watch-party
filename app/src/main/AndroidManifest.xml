@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
     <application android:extractNativeLibs="true" android:label="Family Watch Party"
         android:icon="@drawable/app_icon" android:theme="@android:style/Theme.Material.NoActionBar"
-        android:allowBackup="false" android:usesCleartextTraffic="true">
+        android:enableOnBackInvokedCallback="false" android:allowBackup="false" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true"
             android:supportsPictureInPicture="false" android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|keyboard"

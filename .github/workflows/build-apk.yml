@@ -26,6 +26,11 @@ jobs:
           python tests/family_scope.py
           node tests/sync-policy.cjs
           node tests/family-protocol.cjs
+      - name: Bundled family UI and foreground-disconnect tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/family-ui" playwright@1.51.1 --no-audit --no-fund
+          "$RUNNER_TEMP/family-ui/node_modules/.bin/playwright" install --with-deps chromium
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/family-ui/node_modules/playwright" node tests/family-ui.cjs
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
@@ -70,9 +75,14 @@ jobs:
             SIGNATURE.txt
             APK-INFO.txt
             app/build/reports/tests/testDebugUnitTest/
+      - name: Point Family release tag at the verified source
+        run: |
+          git tag -f v1.0-mpv023 "$GITHUB_SHA"
+          git push --force origin refs/tags/v1.0-mpv023
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0-mpv023
+          target_commitish: ${{ github.sha }}
           name: 'Family Watch Party 1.0 — MPV023'
           make_latest: true
           body: |
