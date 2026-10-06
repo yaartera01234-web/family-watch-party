@@ -21,7 +21,11 @@ object YtAudioSource {
     private val processes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var ready = false
     private val cache = LinkedHashMap<String, Pair<Long, Result>>()
-    private val deadline = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "yt-dlp-timeout").apply { isDaemon = true } }
+    private val timerLock = Any()
+    @Volatile private var allowed = false
+    private fun newDeadline() = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "yt-dlp-timeout").apply { isDaemon = true } }
+    private var deadline = newDeadline()
+    fun resume() = synchronized(timerLock) { if (deadline.isShutdown) deadline=newDeadline(); allowed=true }
     data class Result(val url: String, val title: String?, val audioUrl: String? = null,
                       val height: Int = 0, val audioCodec: String = "", val userAgent: String = UA, val referer: String? = null, val qualities: List<Int> = emptyList())
 
@@ -50,7 +54,10 @@ object YtAudioSource {
         generation.incrementAndGet()
         processes.forEach { try { YoutubeDL.getInstance().destroyProcessById(it) } catch (_: Throwable) {} }
     }
-    fun shutdown() { cancelAll(); deadline.shutdownNow() }
+    fun shutdown() {
+        synchronized(timerLock) { allowed=false; generation.incrementAndGet(); deadline.shutdownNow() }
+        processes.forEach { try { YoutubeDL.getInstance().destroyProcessById(it) } catch (_: Throwable) {} }
+    }
 
     fun videoIdOf(input: String): String? {
         val s = input.trim()
@@ -67,12 +74,12 @@ object YtAudioSource {
     fun resolve(videoId: String, validate: Boolean = false, preferHeight: Int = 0): Result? {
         if (!Regex("[A-Za-z0-9_-]{11}").matches(videoId)) return null
         val ticket = generation.get()
-        if (Thread.currentThread().isInterrupted) return null
+        if (!allowed || Thread.currentThread().isInterrupted) return null
         val key = "$videoId:$preferHeight"
         if (!validate) cache[key]?.let { if (SystemClock.elapsedRealtime() - it.first < 120_000L) return it.second }
         return try {
             initRuntime()
-            check(ticket == generation.get() && !Thread.currentThread().isInterrupted)
+            check(allowed && ticket == generation.get() && !Thread.currentThread().isInterrupted)
             val request = YoutubeDLRequest("https://www.youtube.com/watch?v=$videoId")
             request.addOption("--dump-single-json")
             request.addOption("--skip-download")
@@ -84,13 +91,16 @@ object YtAudioSource {
             request.addOption("-f", YtStreamSelection.format(preferHeight))
             val processId = "wp-stream-${UUID.randomUUID()}"
             val expired = AtomicBoolean(false)
-            val timeout = deadline.schedule({ expired.set(true); YoutubeDL.getInstance().destroyProcessById(processId) }, 70, TimeUnit.SECONDS)
+            val timeout = synchronized(timerLock) {
+                check(allowed && ticket == generation.get() && !Thread.currentThread().isInterrupted)
+                deadline.schedule({ expired.set(true); YoutubeDL.getInstance().destroyProcessById(processId) }, 70, TimeUnit.SECONDS)
+            }
             processes.add(processId)
             val response = try {
-                check(ticket == generation.get() && !Thread.currentThread().isInterrupted)
+                check(allowed && ticket == generation.get() && !Thread.currentThread().isInterrupted)
                 YoutubeDL.getInstance().execute(request, processId, false, null)
             } finally { timeout.cancel(false); processes.remove(processId); try { YoutubeDL.getInstance().destroyProcessById(processId) } catch (_: Throwable) {} }
-            check(ticket == generation.get() && !Thread.currentThread().isInterrupted)
+            check(allowed && ticket == generation.get() && !Thread.currentThread().isInterrupted)
             check(!expired.get()) { "Extractor timeout" }
             val stream = YtStreamSelection.parse(response.out, preferHeight, UA)
             val result = Result(stream.url, stream.title, stream.audioUrl, stream.height, stream.audioCodec, stream.userAgent, stream.referer, stream.qualities)

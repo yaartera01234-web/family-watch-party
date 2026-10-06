@@ -36,7 +36,7 @@ def check_manifest(p,merged=False):
   n=perm.get(A+'name','')
   if any(x in n for x in ['FOREGROUND_SERVICE','WAKE_LOCK','POST_NOTIFICATIONS','RECEIVE_BOOT_COMPLETED','RECORD_AUDIO','SYSTEM_ALERT_WINDOW']):
    assert not merged and perm.get(T+'node')=='remove',(p,n)
- acts=app.findall('activity');assert len(acts)==1,(p,len(acts));assert acts[0].get(A+'supportsPictureInPicture')=='false';assert acts[0].get(A+'excludeFromRecents')=='true'
+ acts=app.findall('activity');assert len(acts)==1,(p,len(acts));assert acts[0].get(A+'supportsPictureInPicture')=='false';assert acts[0].get(A+'excludeFromRecents')=='false'
 check_manifest(a/'AndroidManifest.xml')
 if '--merged' in sys.argv:
  manifests=list((r/'app/build/intermediates/merged_manifests').glob('**/AndroidManifest.xml'));assert manifests,'Merged manifests not found'
@@ -52,3 +52,15 @@ assert 'AudioManager.STREAM_MUSIC' in gesture and 'STREAM_VOICE_CALL' not in ges
 assert 'MODIFY_AUDIO_SETTINGS' in (a/'AndroidManifest.xml').read_text()
 assert 'room.publish' not in (assets/'family-gestures.js').read_text()
 print('PASS window-only brightness, restored joining brightness, device media volume and no room publication.')
+
+activity=(a/'java/app/party/family/MainActivity.kt').read_text()
+suspend=activity.split('private fun suspendForBackground() {')[1].split('override fun onActivityResult')[0]
+for bad in ['fullStop()', 'killOwnProcess()', 'forceTerminateProcess()', 'finishAndRemoveTask()', 'Thread(']: assert bad not in suspend,bad
+for good in ['captureResume()', 'destroyPage()', 'resolver.shutdownNow()', 'YtAudioSource.shutdown()', 'player?.destroy()', 'terminateOwnedChildren()']: assert good in suspend,good
+assert 'sessionPrefs.getInt("task", -1) != taskId' in activity
+assert 'epoch != pageGeneration' in activity
+session=(assets/'family-session.js').read_text()
+restore=session.split('window.familyRestore=data=>{')[1].split('async function resume()')[0]
+assert "room.join(" not in restore and "send('load'" not in restore and "send('resume'" not in restore
+assert 'model.playing=false' in restore and 'sessionPaused=true' in restore
+print('PASS reversible suspension has no terminal kill; task-scoped paused restore has no network/media start. Static only.')

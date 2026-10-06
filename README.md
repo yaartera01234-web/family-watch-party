@@ -7,7 +7,7 @@ This repository does not update the original application, package or repository.
 ## Foreground only — intentionally strict
 - Current joining page → immersive MPV player, playlist/source/settings inside the player.
 - No chat, DM, calls, lobby, foreground/background services, notifications, PiP, boot receiver, jobs or restart watchdog.
-- Home, lock or leaving the app stops playback and destroys the player and WebView/MQTT document. Resolver work and yt-dlp processes are cancelled. The task and application process are terminated on stop. Reopen returns to the joining page; no automatic room rejoin/playback.
+- Home, lock or leaving the app stops playback and destroys the player and WebView/MQTT document. Resolver work and yt-dlp processes are cancelled. The inactive task remains in Recents. Returning restores a paused, local movie/queue/position snapshot; only an explicit Play reconnects and resumes. Recents swipe removes the task, with terminal cleanup when Android delivers finishing callbacks. No claim of privileged Android Force Stop; Android may retain an inert cached process. Snapshots are task-ID scoped so a new task does not restore a swiped session.
 - The avatar picker may retain an **inert, paused joining screen only** while Android's external picker is open. It is unavailable while joined; there is no active media, broker connection or service behind it.
 - Keep-screen-on applies only while joined and visible; it is not a background wake lock.
 - Source/build tests are not a substitute for Home/lock/Recents/old-device testing on a handset.

@@ -9,8 +9,8 @@ android {
         applicationId = "app.party.family"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2-MPV023"
+        versionCode = 4
+        versionName = "1.3-MPV023"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildTypes { release { isMinifyEnabled = false } }

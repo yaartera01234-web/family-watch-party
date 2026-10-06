@@ -26,10 +26,18 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private var player: MpvVideoPlayer? = null
     private val main = Handler(Looper.getMainLooper())
-    private val resolver = Executors.newSingleThreadExecutor()
+    private var resolver = Executors.newSingleThreadExecutor()
     private var resolveTask: Future<*>? = null
     @Volatile private var foreground = false
-    private var closed = false
+    @Volatile private var closed = false
+    @Volatile private var pageGeneration = 0L
+    private var webAlive = false
+    private var pageReady = false
+    private var pageRestored = false
+    private val sessionLock = Any()
+    private var savedSession: JSONObject? = null
+    private var lastSeekAt = -10_000L
+    private val sessionPrefs by lazy { getSharedPreferences("family-resume", MODE_PRIVATE) }
     private var joined = false
     private var loadGeneration = 0L
     private var mediaId = ""
@@ -70,6 +78,15 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(root)
+        readResumeForTask()
+        YtAudioSource.ensureInit(applicationContext)
+        createPage()
+        immersive()
+    }
+    private fun createPage() {
+        if (webAlive || closed) return
+        val epoch = ++pageGeneration
+        pageReady = false; pageRestored = false; webAlive = true
         web = WebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             settings.javaScriptEnabled = true
@@ -81,7 +98,7 @@ class MainActivity : Activity() {
             settings.mediaPlaybackRequiresUserGesture = true
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
-            addJavascriptInterface(FamilyBridge(), "FamilyNative")
+            addJavascriptInterface(FamilyBridge(epoch), "FamilyNative")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
                 override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
@@ -90,7 +107,13 @@ class MainActivity : Activity() {
                     if (u.startsWith("file:///android_asset/") || u.startsWith("data:")) return null
                     return WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
                 }
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (epoch == pageGeneration && webAlive && url == "file:///android_asset/index.html") {
+                        pageReady = true; restoreUiIfNeeded()
+                    }
+                }
                 override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                    if (epoch != pageGeneration) return true
                     fullStop(); finishAndRemoveTask(); killOwnProcess(); return true
                 }
             }
@@ -109,8 +132,6 @@ class MainActivity : Activity() {
             }
         }
         root.addView(web, FrameLayout.LayoutParams(-1, -1))
-        YtAudioSource.ensureInit(applicationContext)
-        immersive()
         web.loadUrl("file:///android_asset/index.html")
     }
     private fun immersive() {
@@ -137,22 +158,80 @@ class MainActivity : Activity() {
         super.onResume()
         if (closed) { finishAndRemoveTask(); killOwnProcess(); return }
         foreground = true
-        web.onResume(); web.resumeTimers(); immersive()
+        if (resolver.isShutdown) resolver = Executors.newSingleThreadExecutor()
+        YtAudioSource.resume()
+        createPage()
+        web.onResume(); web.resumeTimers(); immersive(); restoreUiIfNeeded()
         main.removeCallbacks(ticker); main.post(ticker)
     }
     override fun onPause() {
-        foreground = false
-        main.removeCallbacks(ticker)
-        // No media/room exists during avatar picking; only an inert paused joining UI is retained.
-        if (photoPending && !joined) { web.onPause(); web.pauseTimers() }
-        else { fullStop(); finishAndRemoveTask() }
+        if (photoPending && !joined) {
+            foreground = false; main.removeCallbacks(ticker)
+            web.onPause(); web.pauseTimers()
+        } else suspendForBackground()
         super.onPause()
     }
     override fun onStop() {
         super.onStop()
-        if (!photoPending) { fullStop(); killOwnProcess() }
+        // Ordinary lock/Home retains the task. Only a finishing Activity uses terminal cleanup.
+        if (isFinishing) { clearResume(); fullStop(); killOwnProcess() }
     }
-    override fun onDestroy() { fullStop(); super.onDestroy() }
+    override fun onDestroy() {
+        if (isFinishing) { clearResume(); fullStop() }
+        else suspendForBackground()
+        super.onDestroy()
+    }
+    private fun readResumeForTask() {
+        if (sessionPrefs.getInt("task", -1) != taskId) { clearResume(); return }
+        val raw = sessionPrefs.getString("session", null) ?: return
+        savedSession = try { SessionSnapshot.sanitize(JSONObject(raw)) } catch (_: Throwable) { null }
+    }
+    private fun clearResume() {
+        synchronized(sessionLock) { savedSession = null }
+        sessionPrefs.edit().remove("session").remove("task").commit()
+    }
+    private fun restoreUiIfNeeded() {
+        if (!foreground || closed || !webAlive || !pageReady || pageRestored) return
+        pageRestored = true
+        val snapshot = synchronized(sessionLock) { savedSession?.toString() } ?: return
+        emit("window.familyRestore&&window.familyRestore($snapshot)")
+    }
+    private fun captureResume() {
+        val copy = synchronized(sessionLock) { savedSession?.let { JSONObject(it.toString()) } } ?: return
+        val model = copy.optJSONObject("model") ?: return
+        val id = model.optString("current", "")
+        if (mediaId.isNotEmpty() && id == mediaId) {
+            val pos = if (pending || SystemClock.elapsedRealtime()-lastSeekAt < 1000) requestedPosition else player?.rawPosition() ?: model.optDouble("pos",0.0)
+            if (pos.isFinite() && pos >= 0) model.put("pos",pos)
+            val duration=player?.duration() ?: 0.0
+            if (duration>0) copy.put("duration",duration)
+            if (title.isNotBlank()) copy.put("displayTitle",title.take(160))
+        }
+        model.put("playing",false)
+        val clean=SessionSnapshot.sanitize(copy) ?: return
+        synchronized(sessionLock) { savedSession=clean }
+        sessionPrefs.edit().putInt("task",taskId).putString("session",clean.toString()).commit()
+    }
+    private fun destroyPage() {
+        if (!webAlive) return
+        webAlive=false; pageReady=false; pageRestored=false; pageGeneration++
+        try { web.removeJavascriptInterface("FamilyNative"); web.stopLoading(); web.loadUrl("about:blank"); web.onPause(); web.pauseTimers(); root.removeView(web); web.destroy() } catch (_: Throwable) {}
+    }
+    private fun suspendForBackground() {
+        if (closed) return
+        synchronized(sessionLock) { foreground=false }
+        captureResume()
+        loadGeneration++; main.removeCallbacksAndMessages(null)
+        // Document destruction is the hard network boundary: no MQTT socket/timer survives.
+        destroyPage()
+        resolveTask?.cancel(true); resolver.shutdownNow(); YtAudioSource.shutdown()
+        player?.destroy(); player=null; releaseFocus()
+        if (joined) gestures.leave()
+        joined=false; pending=false; requestedPlaying=false; mediaId=""
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        terminateOwnedChildren()
+        // No finish(), exit fuse or own-process kill here. The paused task remains in Recents.
+    }
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 501) {
@@ -171,10 +250,7 @@ class MainActivity : Activity() {
         resolveTask?.cancel(true); YtAudioSource.cancelAll(); resolver.shutdownNow(); YtAudioSource.shutdown()
         player?.destroy(); player = null; releaseFocus()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (::web.isInitialized) {
-            // Destroying the document terminates MQTT sockets/reconnect timers, not just UI visibility.
-            try { web.removeJavascriptInterface("FamilyNative"); web.stopLoading(); web.loadUrl("about:blank"); web.onPause(); web.pauseTimers(); root.removeView(web); web.destroy() } catch (_: Throwable) {}
-        }
+        destroyPage()
         photoCallback?.onReceiveValue(null); photoCallback = null
     }
     private fun killOwnProcess() {
@@ -183,7 +259,7 @@ class MainActivity : Activity() {
         YtAudioSource.cancelAll()
         forceTerminateProcess()
     }
-    private fun forceTerminateProcess() {
+    private fun terminateOwnedChildren() {
         val ownPid = android.os.Process.myPid()
         val ownUid = android.os.Process.myUid()
         // yt-dlp may spawn QuickJS. Kill only this package UID's children, never another app.
@@ -197,6 +273,10 @@ class MainActivity : Activity() {
                 } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {}
+    }
+    private fun forceTerminateProcess() {
+        terminateOwnedChildren()
+        val ownPid = android.os.Process.myPid()
         // Zygote normally gives an app its own process group. Guard ownership before group kill.
         try {
             val ownGroup = ShutdownScope.ownedGroupPid(java.io.File("/proc/self/stat").readText(), ownPid)
@@ -210,7 +290,7 @@ class MainActivity : Activity() {
         if (joined && !closed) emit("window.familyBack&&window.familyBack()")
         else { fullStop(); finishAndRemoveTask(); killOwnProcess() }
     }
-    private fun emit(js: String) { if (foreground && !closed && ::web.isInitialized) web.evaluateJavascript(js, null) }
+    private fun emit(js: String) { if (foreground && !closed && webAlive) web.evaluateJavascript(js, null) }
     private fun error(message: String) {
         pending = false
         emit("window.familyError&&window.familyError(${JSONObject.quote(message)})")
@@ -223,8 +303,10 @@ class MainActivity : Activity() {
     private fun command(o: JSONObject) {
         if (!foreground || closed) return
         when (o.optString("action")) {
-            "join" -> { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; gestures.enter(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
-            "leave" -> { joined = false; gestures.leave(); stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
+            "join" -> { if (resolver.isShutdown) resolver = Executors.newSingleThreadExecutor(); YtAudioSource.resume(); (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; gestures.enter(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
+            "leave" -> { clearResume(); joined = false; gestures.leave(); stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
+            "restore" -> { joined = true; gestures.enter(); immersive() }
+            "suspend" -> { captureResume(); stopMedia(); resolver.shutdownNow(); YtAudioSource.shutdown(); terminateOwnedChildren(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             "gestureBegin" -> if (joined) gestures.begin(o.optLong("id",-1),o.optString("kind"))
             "gestureMove" -> if (joined) gestures.move(o.optLong("id",-1),o.optDouble("delta",Double.NaN))
             "gestureEnd" -> if (joined) gestures.end(o.optLong("id",-1))
@@ -233,7 +315,7 @@ class MainActivity : Activity() {
             "stop" -> stopMedia()
             "pause" -> { requestedPlaying = false; player?.pause() }
             "resume" -> if (joined) { if (acquireFocus()) { requestedPlaying = true; if (!pending) player?.resume() } else error("Audio busy hai. Retry karo.") }
-            "seek" -> { val p=o.optDouble("position",0.0); if (p.isFinite() && p in 0.0..1e8) { requestedPosition=p; if (!pending) player?.seekTo(p) } }
+            "seek" -> { val p=o.optDouble("position",0.0); if (p.isFinite() && p in 0.0..1e8) { requestedPosition=p; lastSeekAt=SystemClock.elapsedRealtime(); if (!pending) player?.seekTo(p) } }
             "mute" -> { muted=o.optBoolean("muted"); player?.setMuted(muted) }
             "aspect" -> player?.setAspect(o.optInt("index",0))
             "speed" -> player?.setSyncSpeed(o.optDouble("speed",1.0))
@@ -295,10 +377,18 @@ class MainActivity : Activity() {
             main.postDelayed(this,300)
         }
     }
-    private inner class FamilyBridge {
+    private inner class FamilyBridge(private val epoch: Long) {
         @JavascriptInterface fun postMessage(json: String) {
-            if (!foreground || closed || json.length > 65536) return
-            main.post { if (foreground && !closed) try { command(JSONObject(json)) } catch (_: Throwable) { error("Dobara try karo.") } }
+            if (!foreground || closed || epoch != pageGeneration || json.length > 600000) return
+            val message = try { JSONObject(json) } catch (_: Throwable) { return }
+            if (message.optString("action") == "remember") {
+                val clean=message.optJSONObject("snapshot")?.let { SessionSnapshot.sanitize(it) } ?: return
+                synchronized(sessionLock) {
+                    if (foreground && !closed && epoch == pageGeneration) savedSession=clean
+                }
+                return
+            }
+            main.post { if (foreground && !closed && epoch == pageGeneration) try { command(message) } catch (_: Throwable) { error("Dobara try karo.") } }
         }
     }
 }

@@ -9,7 +9,7 @@
         android:icon="@drawable/app_icon" android:theme="@android:style/Theme.Material.NoActionBar"
         android:enableOnBackInvokedCallback="false" android:allowBackup="false" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true"
-            android:supportsPictureInPicture="false" android:excludeFromRecents="true"
+            android:supportsPictureInPicture="false" android:excludeFromRecents="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|keyboard"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
