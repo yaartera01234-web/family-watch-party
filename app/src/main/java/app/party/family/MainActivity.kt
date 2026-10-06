@@ -113,6 +113,17 @@ class MainActivity : Activity() {
         web.loadUrl("file:///android_asset/index.html")
     }
     private fun immersive() {
+        // Same full-width cutout policy as the original native fullscreen player.
+        // Extend the surface/window, not the video's aspect ratio or crop.
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = if (!joined) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                else if (Build.VERSION.SDK_INT >= 30)
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(!joined)
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN
             or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
@@ -212,7 +223,7 @@ class MainActivity : Activity() {
         if (!foreground || closed) return
         when (o.optString("action")) {
             "join" -> { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(web.windowToken, 0); joined = true; window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); immersive() }
-            "leave" -> { joined = false; stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+            "leave" -> { joined = false; stopMedia(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; immersive() }
             "rotate" -> { requestedOrientation = if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; immersive() }
             "load" -> if (joined) load(o)
             "stop" -> stopMedia()
