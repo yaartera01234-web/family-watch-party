@@ -13,6 +13,6 @@ const assert=require('node:assert/strict'),path=require('node:path');const {chro
  }finally{
  for(const p of pages)try{await p.evaluate(()=>{room.timers.forEach(clearInterval);room.timers=[]})}catch(e){}
  if(prefix&&pages[0])try{await pages[0].evaluate(async prefix=>{const c=room.client;if(!c?.connected)return;await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('cleanup timeout')),7000);c.publish(prefix+'/state','',{qos:1,retain:true},err=>{clearTimeout(timer);err?reject(err):resolve()})})},prefix);console.log('PASS synthetic retained queue deleted with QoS1 acknowledgement.')}catch(e){console.error('CLEANUP FAILED',prefix,e.message);process.exitCode=1}
- for(const p of pages)try{await p.evaluate(async()=>{const c=room.client;if(c?.connected)await new Promise(resolve=>c.publish(room.prefix+'/p/'+room.id,'',{qos:1,retain:true},resolve));room.leave()})}catch(e){}
+ for(const p of pages)try{await p.evaluate(async()=>{const c=room.client;if(c?.connected)await new Promise(resolve=>c.publish(room.prefix+'/p/'+room.id,'',{qos:1,retain:true},resolve));room.active=false;room.connected=false;room.generation++;room.client=null;if(c)await new Promise(resolve=>c.end(false,{},resolve))})}catch(e){}
  await b.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

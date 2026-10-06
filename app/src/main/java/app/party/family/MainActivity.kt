@@ -187,8 +187,8 @@ class MainActivity : Activity() {
         } catch (_: Throwable) {}
         // Zygote normally gives an app its own process group. Guard ownership before group kill.
         try {
-            if (android.system.Os.getpgid(ownPid) == ownPid)
-                android.system.Os.kill(-ownPid, android.system.OsConstants.SIGKILL)
+            val ownGroup = ShutdownScope.ownedGroupPid(java.io.File("/proc/self/stat").readText(), ownPid)
+            if (ownGroup != null) android.system.Os.kill(-ownGroup, android.system.OsConstants.SIGKILL)
         } catch (_: Throwable) {}
         android.os.Process.killProcess(ownPid)
         exitProcess(0)

@@ -10,7 +10,7 @@ for good in ['web.destroy()', 'resolver.shutdownNow()', 'YtAudioSource.shutdown(
  assert good in src,good
 assert 'SystemClock.sleep(450); forceTerminateProcess()' in src
 assert 'hideSoftInputFromWindow' in src
-assert 'uid == ownUid' in src and 'Os.getpgid(ownPid) == ownPid' in src and 'Os.kill(-ownPid' in src
+assert 'uid == ownUid' in src and 'pgrp == ownPid' in src and 'Os.kill(-ownGroup' in src
 assert 'player?.destroy()' in src and 'if (!foreground || closed)' in src
 assets=a/'assets';html=(assets/'index.html').read_text();js=(assets/'family.js').read_text();room=(assets/'family-room.js').read_text()
 assert 'FamilyNative' in js and 'familyNativeState' in js and "document.hidden&&joined" in js

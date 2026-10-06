@@ -13,7 +13,7 @@
 - Tests used the APK's actual bundled MQTT.js and production CSP from the local-file page (no CSP bypass in this suite).
 - Found and fixed MQTT.js's automatic Worker keepalive conflicting with restrictive CSP: explicitly use foreground-document/native timers, not a blob Worker.
 - Found cross-client retained-state write ordering can expose an older queue snapshot first. Lower-revision repair was added; a joining peer now loads paused until fresh room anchoring/settling, preventing a stale playing snapshot from briefly starting audio.
-- All synthetic retained queue payloads were deleted with acknowledged QoS1 empty retained publishes; synthetic presence entries also cleared.
+- All synthetic retained queue payloads were deleted with acknowledged QoS1 empty retained publishes; successful-run synthetic presence entries are explicitly cleared before a graceful test disconnect. Unexpected disconnects can leave harmless offline presence tombstones, which are ignored by the app.
 - These tests do **not** prove old-phone MPV decoding, physical device lifecycle behavior or public broker uptime on the user's network.
 
 ## Native build/packaging gates
@@ -27,3 +27,5 @@ Install the final APK on the user's older arm64 device. Test actual MP4, YouTube
 No original app/repository files were changed by this derivative.
 
 Final hardening additionally hides the Android keyboard on Join, acquires foreground audio focus without auto-resume on focus gain, and arms a one-shot 450ms terminal shutdown fuse so a blocked native destructor cannot leave the app running. Own-UID child cleanup and an own-PID process-group ownership check cover Python/QuickJS descendants; no other app UID/group is targeted. This is terminal cleanup, not an ongoing/restart service.
+
+Android does not expose getpgid in its public SDK. The final build reads its own /proc/self/stat with a pure, fail-closed parser (four JVM regression tests) before any process-group termination. No hidden API reflection is used.
