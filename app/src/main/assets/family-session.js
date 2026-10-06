@@ -47,7 +47,9 @@
    settleTimer=null;if(ticket!==serial||!joined||sessionPaused||!reconnecting||!room.connected)return;
    const local=JSON.parse(JSON.stringify(model)),remote=candidateState;reconnecting=false;bootstrap=false;
    const highest=remote&&P.compare(remote.epoch,local.epoch)>0?remote.epoch:local.epoch;
-   sync.remoteCommand(highest);
+   // A live room is authoritative even if it restarted with a lower revision.
+   // Never inject the detached local revision into its anchor probes.
+   sync.remoteCommand(livePeer&&remote?remote.epoch:highest);
    if(livePeer&&remote){
     model=remote;
     if(model.playing){joinHold=true;sync.needAnchor=true;}
